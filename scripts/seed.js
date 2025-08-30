@@ -1,12 +1,14 @@
 const mysql = require('mysql2/promise');
+
+// Load environment variables
 require('dotenv').config({ path: '.env.local' });
 
 const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'visual_product_matcher',
-  port: parseInt(process.env.DB_PORT || '3306'),
+  host: process.env.DATABASE_HOST || 'localhost',
+  user: process.env.DATABASE_USER || 'root',
+  password: process.env.DATABASE_PASSWORD || '',
+  database: process.env.DATABASE_NAME || 'visual_product_matcher',
+  port: parseInt(process.env.DATABASE_PORT || '3306'),
 };
 
 const sampleProducts = [
@@ -156,43 +158,80 @@ async function seed() {
   let connection;
   
   try {
-    console.log('Connecting to database...');
+    console.log('🔌 Connecting to database...');
+    console.log(`Host: ${dbConfig.host}:${dbConfig.port}`);
+    console.log(`Database: ${dbConfig.database}`);
+    
     connection = await mysql.createConnection(dbConfig);
+    console.log('✅ Connected to database');
     
     // Check if products already exist
     const [existing] = await connection.execute('SELECT COUNT(*) as count FROM products');
     if (existing[0].count > 0) {
-      console.log('Products already exist, skipping seed...');
+      console.log(`⚠️  ${existing[0].count} products already exist`);
+      console.log('Do you want to proceed? This will add duplicate products.');
+      console.log('Consider running: DELETE FROM products; first if needed.');
+      // For now, we'll skip to avoid duplicates
+      console.log('🚫 Skipping seed to avoid duplicates');
       return;
     }
     
-    console.log('Seeding sample products...');
+    console.log('🌱 Seeding sample products...');
     
     const query = `
       INSERT INTO products (name, category, image_url, price, description)
       VALUES (?, ?, ?, ?, ?)
     `;
     
-    for (const product of sampleProducts) {
-      await connection.execute(query, [
-        product.name,
-        product.category,
-        product.image_url,
-        product.price,
-        product.description
-      ]);
+    let successCount = 0;
+    
+    for (let i = 0; i < sampleProducts.length; i++) {
+      const product = sampleProducts[i];
+      try {
+        await connection.execute(query, [
+          product.name,
+          product.category,
+          product.image_url,
+          product.price,
+          product.description
+        ]);
+        successCount++;
+        console.log(`✅ Added: ${product.name} (${i + 1}/${sampleProducts.length})`);
+      } catch (error) {
+        console.error(`❌ Failed to add ${product.name}:`, error.message);
+      }
     }
     
-    console.log(`✅ Successfully seeded ${sampleProducts.length} products!`);
+    // Verify the seeding
+    const [finalCount] = await connection.execute('SELECT COUNT(*) as count FROM products');
+    console.log(`🎉 Seeding completed! Added ${successCount}/${sampleProducts.length} products`);
+    console.log(`📊 Total products in database: ${finalCount[0].count}`);
     
   } catch (error) {
     console.error('❌ Seeding failed:', error);
+    console.error('Error details:', error.message);
+    
+    // Provide helpful error messages
+    if (error.code === 'ER_ACCESS_DENIED_ERROR') {
+      console.error('🔑 Access denied. Please check your database credentials.');
+    } else if (error.code === 'ECONNREFUSED') {
+      console.error('🔌 Connection refused. Please ensure MySQL server is running.');
+    } else if (error.code === 'ER_BAD_DB_ERROR') {
+      console.error('📦 Database does not exist. Please run migration first: npm run db:migrate');
+    }
+    
     process.exit(1);
   } finally {
     if (connection) {
       await connection.end();
+      console.log('🔐 Database connection closed');
     }
   }
 }
 
-seed();
+// Run seeding
+if (require.main === module) {
+  seed();
+}
+
+module.exports = { seed };

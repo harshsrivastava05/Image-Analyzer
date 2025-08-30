@@ -1,25 +1,35 @@
 const mysql = require('mysql2/promise');
+const path = require('path');
+
+// Load environment variables
 require('dotenv').config({ path: '.env.local' });
 
 const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  port: parseInt(process.env.DB_PORT || '3306'),
+  host: process.env.DATABASE_HOST || 'localhost',
+  user: process.env.DATABASE_USER || 'root',
+  password: process.env.DATABASE_PASSWORD || '',
+  port: parseInt(process.env.DATABASE_PORT || '3306'),
 };
 
 async function migrate() {
   let connection;
   
   try {
-    console.log('Connecting to MySQL...');
+    console.log('🔌 Connecting to MySQL server...');
+    console.log(`Host: ${dbConfig.host}:${dbConfig.port}`);
+    console.log(`User: ${dbConfig.user}`);
+    
     connection = await mysql.createConnection(dbConfig);
+    console.log('✅ Connected to MySQL server');
     
-    console.log('Creating database...');
-    await connection.execute(`CREATE DATABASE IF NOT EXISTS ${process.env.DB_NAME || 'visual_product_matcher'}`);
-    await connection.execute(`USE ${process.env.DB_NAME || 'visual_product_matcher'}`);
+    const dbName = process.env.DATABASE_NAME || 'visual_product_matcher';
+    console.log(`📦 Creating database: ${dbName}`);
     
-    console.log('Creating tables...');
+    await connection.execute(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
+    await connection.execute(`USE \`${dbName}\``);
+    console.log('✅ Database selected');
+    
+    console.log('🏗️  Creating tables...');
     
     // Products table
     await connection.execute(`
@@ -36,8 +46,9 @@ async function migrate() {
         INDEX idx_category (category),
         INDEX idx_name (name),
         INDEX idx_price (price)
-      )
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+    console.log('✅ Products table created');
 
     // User uploads table
     await connection.execute(`
@@ -50,8 +61,9 @@ async function migrate() {
         session_id VARCHAR(100),
         INDEX idx_session (session_id),
         INDEX idx_upload_time (upload_time)
-      )
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+    console.log('✅ User uploads table created');
 
     // Search history table
     await connection.execute(`
@@ -63,19 +75,32 @@ async function migrate() {
         search_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (upload_id) REFERENCES user_uploads(id) ON DELETE CASCADE,
         INDEX idx_search_time (search_time)
-      )
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+    console.log('✅ Search history table created');
 
-    console.log('✅ Migration completed successfully!');
+    // Verify tables were created
+    const [tables] = await connection.execute('SHOW TABLES');
+    console.log(`✅ Migration completed! Created ${tables.length} tables:`);
+    tables.forEach((table) => {
+      console.log(`   - ${Object.values(table)[0]}`);
+    });
     
   } catch (error) {
     console.error('❌ Migration failed:', error);
+    console.error('Error details:', error.message);
     process.exit(1);
   } finally {
     if (connection) {
       await connection.end();
+      console.log('🔐 Database connection closed');
     }
   }
 }
 
-migrate();
+// Run migration
+if (require.main === module) {
+  migrate();
+}
+
+module.exports = { migrate };
