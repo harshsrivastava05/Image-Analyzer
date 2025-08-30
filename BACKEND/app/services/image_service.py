@@ -24,6 +24,13 @@ class ImageService:
             # Try to open image
             try:
                 image = Image.open(io.BytesIO(image_data))
+                
+                # Verify image can be processed
+                image.verify()
+                
+                # Reopen image for processing (verify() closes the image)
+                image = Image.open(io.BytesIO(image_data))
+                
             except Exception as e:
                 return False, f"Invalid image format: {str(e)}", None
             
@@ -37,19 +44,33 @@ class ImageService:
                 image.thumbnail(self.max_dimensions, Image.Resampling.LANCZOS)
             
             # Convert to RGB if necessary (for JPEG compatibility)
-            if image.mode in ('RGBA', 'P'):
-                rgb_image = Image.new('RGB', image.size, (255, 255, 255))
+            if image.mode in ('RGBA', 'P', 'LA'):
+                logger.info(f"Converting image from {image.mode} to RGB")
                 if image.mode == 'P':
+                    # Convert palette mode to RGBA first
                     image = image.convert('RGBA')
-                rgb_image.paste(image, mask=image.split()[-1] if len(image.split()) == 4 else None)
+                
+                # Create RGB background
+                rgb_image = Image.new('RGB', image.size, (255, 255, 255))
+                
+                if image.mode in ('RGBA', 'LA'):
+                    # Use alpha channel for compositing
+                    rgb_image.paste(image, mask=image.split()[-1])
+                else:
+                    rgb_image.paste(image)
+                
                 image = rgb_image
             
             # Save processed image to bytes
             output = io.BytesIO()
-            image.save(output, format='JPEG', quality=85, optimize=True)
+            
+            # Optimize image quality based on size
+            quality = 95 if len(image_data) < 1024 * 1024 else 85  # Higher quality for smaller images
+            
+            image.save(output, format='JPEG', quality=quality, optimize=True)
             processed_data = output.getvalue()
             
-            logger.info(f"Image processed successfully: {len(processed_data)} bytes")
+            logger.info(f"Image processed successfully: {len(processed_data)} bytes (original: {len(image_data)} bytes)")
             return True, "Image processed successfully", processed_data
             
         except Exception as e:
@@ -62,12 +83,14 @@ class ImageService:
         """
         try:
             image = Image.open(io.BytesIO(image_data))
+            
             return {
                 "format": image.format,
                 "mode": image.mode,
                 "size": image.size,
                 "width": image.width,
-                "height": image.height
+                "height": image.height,
+                "has_transparency": image.mode in ('RGBA', 'LA', 'P') and 'transparency' in image.info
             }
         except Exception as e:
             logger.error(f"Error getting image info: {e}")

@@ -21,9 +21,18 @@ class DatabaseManager:
                 charset='utf8mb4',
                 autocommit=True,
                 maxsize=20,
-                minsize=5
+                minsize=5,
+                echo=False  # Disable query logging for production
             )
             logger.info("MySQL connection pool created successfully")
+            
+            # Test the connection
+            async with self.pool.acquire() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("SELECT 1")
+                    result = await cursor.fetchone()
+                    logger.info(f"Database connection test successful: {result}")
+                    
         except Exception as e:
             logger.error(f"Failed to create MySQL pool: {e}")
             raise
@@ -40,8 +49,12 @@ class DatabaseManager:
         if not self.pool:
             await self.create_pool()
         
-        async with self.pool.acquire() as connection:
-            yield connection
+        try:
+            async with self.pool.acquire() as connection:
+                yield connection
+        except Exception as e:
+            logger.error(f"Error acquiring database connection: {e}")
+            raise
 
 # Global database manager instance
 db_manager = DatabaseManager()

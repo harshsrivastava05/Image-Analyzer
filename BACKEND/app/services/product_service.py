@@ -13,7 +13,7 @@ class ProductService:
         self.search_strategies = [
             self._exact_brand_category_search,
             self._category_keyword_search, 
-            self._fulltext_search,
+            self._keyword_search,  # Renamed from fulltext_search
             self._tag_based_search
         ]
     
@@ -102,6 +102,8 @@ class ProductService:
             
             products = []
             for row in rows:
+                # Convert Decimal fields to float for Pydantic
+                row = self._convert_decimal_fields(row)
                 product = Product(**row)
                 product_with_similarity = ProductWithSimilarity(
                     **product.dict(),
@@ -126,7 +128,7 @@ class ProductService:
         
         # Build keyword search conditions
         keyword_conditions = []
-        params = [identification.category]
+        params = [identification.brand or '', identification.category]
         
         for term in identification.search_terms[:3]:  # Limit to 3 most relevant terms
             keyword_conditions.append("(LOWER(name) LIKE %s OR LOWER(description) LIKE %s)")
@@ -149,16 +151,16 @@ class ProductService:
             LIMIT %s
         """
         
-        # Add brand to params if available
-        final_params = [identification.brand or ''] + params + [limit]
+        params.append(limit)
         
         async with connection.cursor(aiomysql.DictCursor) as cursor:
-            await cursor.execute(query, final_params)
+            await cursor.execute(query, params)
             rows = await cursor.fetchall()
             
             products = []
             for row in rows:
                 brand_bonus = row.pop('brand_bonus', 0)
+                row = self._convert_decimal_fields(row)
                 product = Product(**row)
                 similarity_score = 0.8 + brand_bonus  # Base similarity + brand bonus
                 
@@ -171,50 +173,53 @@ class ProductService:
             
             return products
     
-    async def _fulltext_search(
+    async def _keyword_search(
         self, 
         connection: aiomysql.Connection, 
         identification: ObjectIdentification, 
         limit: int
     ) -> List[ProductWithSimilarity]:
         """
-        Strategy 3: Full-text search on product names and descriptions
+        Strategy 3: Keyword search on product names and descriptions
         """
         if not identification.search_terms:
             return []
         
-        # Build full-text search query
-        search_term = ' '.join(identification.search_terms[:5])  # Use top 5 search terms
+        # Build keyword search conditions
+        keyword_conditions = []
+        params = []
         
-        query = """
-            SELECT *, 
-            MATCH(name, description) AGAINST(%s IN NATURAL LANGUAGE MODE) as relevance_score
-            FROM products 
-            WHERE MATCH(name, description) AGAINST(%s IN NATURAL LANGUAGE MODE)
+        for term in identification.search_terms[:3]:
+            keyword_conditions.append("(LOWER(name) LIKE %s OR LOWER(description) LIKE %s OR LOWER(brand) LIKE %s)")
+            term_pattern = f"%{term.lower()}%"
+            params.extend([term_pattern, term_pattern, term_pattern])
+        
+        if not keyword_conditions:
+            return []
+        
+        query = f"""
+            SELECT * FROM products 
+            WHERE ({' OR '.join(keyword_conditions)})
             AND in_stock = 1
-            AND MATCH(name, description) AGAINST(%s IN NATURAL LANGUAGE MODE) > 0
-            ORDER BY relevance_score DESC, rating DESC
+            ORDER BY rating DESC, review_count DESC
             LIMIT %s
         """
         
+        params.append(limit)
+        
         async with connection.cursor(aiomysql.DictCursor) as cursor:
-            await cursor.execute(query, (search_term, search_term, search_term, limit))
+            await cursor.execute(query, params)
             rows = await cursor.fetchall()
             
             products = []
-            max_relevance = max([row['relevance_score'] for row in rows]) if rows else 1
-            
             for row in rows:
-                relevance_score = row.pop('relevance_score')
+                row = self._convert_decimal_fields(row)
                 product = Product(**row)
-                
-                # Normalize relevance score to similarity score
-                normalized_score = (relevance_score / max_relevance) * 0.7  # Max 0.7 for full-text
                 
                 product_with_similarity = ProductWithSimilarity(
                     **product.dict(),
-                    similarity_score=max(0.3, normalized_score),  # Minimum 0.3
-                    match_reason=f"Full-text search match"
+                    similarity_score=0.6,  # Medium similarity for keyword matches
+                    match_reason=f"Keyword search match"
                 )
                 products.append(product_with_similarity)
             
@@ -232,44 +237,50 @@ class ProductService:
         if not identification.search_terms:
             return []
         
-        # Build tag search conditions
-        tag_placeholders = ','.join(['%s'] * len(identification.search_terms[:3]))
-        
-        query = f"""
-            SELECT p.*, COUNT(pt.tag) as tag_matches
-            FROM products p
-            JOIN product_tags pt ON p.id = pt.product_id
-            WHERE LOWER(pt.tag) IN ({tag_placeholders})
-            AND p.in_stock = 1
-            GROUP BY p.id
-            ORDER BY tag_matches DESC, p.rating DESC, p.review_count DESC
-            LIMIT %s
-        """
-        
-        params = [term.lower() for term in identification.search_terms[:3]] + [limit]
-        
-        async with connection.cursor(aiomysql.DictCursor) as cursor:
-            await cursor.execute(query, params)
-            rows = await cursor.fetchall()
+        try:
+            # Build tag search conditions
+            tag_placeholders = ','.join(['%s'] * len(identification.search_terms[:3]))
             
-            products = []
-            max_tags = max([row['tag_matches'] for row in rows]) if rows else 1
+            query = f"""
+                SELECT p.*, COUNT(pt.tag) as tag_matches
+                FROM products p
+                JOIN product_tags pt ON p.id = pt.product_id
+                WHERE LOWER(pt.tag) IN ({tag_placeholders})
+                AND p.in_stock = 1
+                GROUP BY p.id
+                ORDER BY tag_matches DESC, p.rating DESC, p.review_count DESC
+                LIMIT %s
+            """
             
-            for row in rows:
-                tag_matches = row.pop('tag_matches')
-                product = Product(**row)
+            params = [term.lower() for term in identification.search_terms[:3]] + [limit]
+            
+            async with connection.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute(query, params)
+                rows = await cursor.fetchall()
                 
-                # Calculate similarity based on tag matches
-                tag_similarity = (tag_matches / max_tags) * 0.6  # Max 0.6 for tag-based
+                products = []
+                max_tags = max([row['tag_matches'] for row in rows]) if rows else 1
                 
-                product_with_similarity = ProductWithSimilarity(
-                    **product.dict(),
-                    similarity_score=max(0.2, tag_similarity),  # Minimum 0.2
-                    match_reason=f"Tag-based match ({tag_matches} matching tags)"
-                )
-                products.append(product_with_similarity)
-            
-            return products
+                for row in rows:
+                    tag_matches = row.pop('tag_matches')
+                    row = self._convert_decimal_fields(row)
+                    product = Product(**row)
+                    
+                    # Calculate similarity based on tag matches
+                    tag_similarity = (tag_matches / max_tags) * 0.6  # Max 0.6 for tag-based
+                    
+                    product_with_similarity = ProductWithSimilarity(
+                        **product.dict(),
+                        similarity_score=max(0.2, tag_similarity),  # Minimum 0.2
+                        match_reason=f"Tag-based match ({tag_matches} matching tags)"
+                    )
+                    products.append(product_with_similarity)
+                
+                return products
+        
+        except Exception as e:
+            logger.warning(f"Tag-based search failed: {e}")
+            return []
     
     async def get_all_products(self, filters: ProductSearchFilter) -> List[Product]:
         """
@@ -318,7 +329,12 @@ class ProductService:
                     await cursor.execute(query, params)
                     rows = await cursor.fetchall()
                     
-                    return [Product(**row) for row in rows]
+                    products = []
+                    for row in rows:
+                        row = self._convert_decimal_fields(row)
+                        products.append(Product(**row))
+                    
+                    return products
         
         except Exception as e:
             logger.error(f"Error getting products: {e}")
@@ -364,12 +380,12 @@ class ProductService:
                     stats = await cursor.fetchone()
                     
                     return {
-                        "total_products": stats["total_products"],
-                        "total_categories": stats["total_categories"],
-                        "total_brands": stats["total_brands"],
+                        "total_products": stats["total_products"] or 0,
+                        "total_categories": stats["total_categories"] or 0,
+                        "total_brands": stats["total_brands"] or 0,
                         "average_price": float(stats["avg_price"]) if stats["avg_price"] else 0,
                         "average_rating": float(stats["avg_rating"]) if stats["avg_rating"] else 0,
-                        "in_stock_products": stats["in_stock_count"]
+                        "in_stock_products": stats["in_stock_count"] or 0
                     }
         
         except Exception as e:
@@ -382,3 +398,17 @@ class ProductService:
                 "average_rating": 0,
                 "in_stock_products": 0
             }
+    
+    def _convert_decimal_fields(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert Decimal fields to float for Pydantic compatibility
+        """
+        converted_row = dict(row)
+        
+        # Convert Decimal fields to float
+        decimal_fields = ['price', 'rating']
+        for field in decimal_fields:
+            if field in converted_row and isinstance(converted_row[field], Decimal):
+                converted_row[field] = float(converted_row[field])
+        
+        return converted_row
