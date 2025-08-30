@@ -1,17 +1,46 @@
 import mysql from 'mysql2/promise';
+import { URL } from 'url';
 
-// Database connection configuration
-const dbConfig = {
-  host: process.env.DATABASE_HOST || 'localhost',
-  user: process.env.DATABASE_USER || 'root',
-  password: process.env.DATABASE_PASSWORD || '',
-  database: process.env.DATABASE_NAME || 'visual_product_matcher',
-  port: parseInt(process.env.DATABASE_PORT || '3306'),
-  acquireTimeout: 60000,
-  timeout: 60000,
-  reconnect: true,
-  charset: 'utf8mb4'
-};
+// Parse DATABASE_URL if provided, otherwise use individual environment variables
+function getDatabaseConfig() {
+  const databaseUrl = process.env.DATABASE_URL;
+  
+  if (databaseUrl) {
+    try {
+      const url = new URL(databaseUrl);
+      
+      return {
+        host: url.hostname,
+        user: url.username,
+        password: url.password,
+        database: url.pathname.slice(1), // Remove leading slash
+        port: parseInt(url.port) || 3306,
+        acquireTimeout: 60000,
+        timeout: 60000,
+        reconnect: true,
+        charset: 'utf8mb4'
+      };
+    } catch (error) {
+      console.error('Invalid DATABASE_URL format:', error);
+      throw new Error('Invalid DATABASE_URL format. Expected: mysql://username:password@host:port/database');
+    }
+  }
+  
+  // Fallback to individual environment variables
+  return {
+    host: process.env.DATABASE_HOST || 'localhost',
+    user: process.env.DATABASE_USER || 'root',
+    password: process.env.DATABASE_PASSWORD || '',
+    database: process.env.DATABASE_NAME || 'visual_product_matcher',
+    port: parseInt(process.env.DATABASE_PORT || '3306'),
+    acquireTimeout: 60000,
+    timeout: 60000,
+    reconnect: true,
+    charset: 'utf8mb4'
+  };
+}
+
+const dbConfig = getDatabaseConfig();
 
 let connection: mysql.Connection | null = null;
 
@@ -19,6 +48,10 @@ export async function getConnection(): Promise<mysql.Connection> {
   if (!connection) {
     try {
       console.log('Establishing database connection...');
+      console.log(`Connecting to: ${dbConfig.host}:${dbConfig.port}`);
+      console.log(`Database: ${dbConfig.database}`);
+      console.log(`User: ${dbConfig.user}`);
+      
       connection = await mysql.createConnection(dbConfig);
       console.log('Database connected successfully');
     } catch (error: any) {
@@ -100,8 +133,8 @@ export async function initializeDatabase(): Promise<void> {
     await conn.ping();
     console.log('Database initialization successful');
     
-    // Verify tables exist, casting to an array to access length
-    const [tables] = await conn.execute('SHOW TABLES') as [any[], any];
+    // Verify tables exist, using query() instead of execute() for SHOW TABLES
+    const [tables] = await conn.query('SHOW TABLES') as [any[], any];
     console.log(`Found ${tables.length} tables in database`);
     
     if (tables.length === 0) {
@@ -133,13 +166,24 @@ export async function healthCheck(): Promise<boolean> {
     await conn.ping();
     
     // Test a simple query
-    await conn.execute('SELECT 1');
+    await conn.query('SELECT 1');
     
     return true;
   } catch (error) {
     console.error('Database health check failed:', error);
     return false;
   }
+}
+
+// Get current database configuration (for debugging)
+export function getDatabaseInfo(): any {
+  return {
+    host: dbConfig.host,
+    user: dbConfig.user,
+    database: dbConfig.database,
+    port: dbConfig.port,
+    usingDatabaseUrl: !!process.env.DATABASE_URL
+  };
 }
 
 // Graceful shutdown

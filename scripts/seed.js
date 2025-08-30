@@ -1,15 +1,39 @@
 const mysql = require('mysql2/promise');
+const { URL } = require('url');
 
 // Load environment variables
 require('dotenv').config({ path: '.env.local' });
 
-const dbConfig = {
-  host: process.env.DATABASE_HOST || 'localhost',
-  user: process.env.DATABASE_USER || 'root',
-  password: process.env.DATABASE_PASSWORD || '',
-  database: process.env.DATABASE_NAME || 'visual_product_matcher',
-  port: parseInt(process.env.DATABASE_PORT || '3306'),
-};
+// Parse DATABASE_URL if provided, otherwise use individual environment variables
+function getDatabaseConfig() {
+  const databaseUrl = process.env.DATABASE_URL;
+  
+  if (databaseUrl) {
+    try {
+      const url = new URL(databaseUrl);
+      
+      return {
+        host: url.hostname,
+        user: url.username,
+        password: url.password,
+        database: url.pathname.slice(1), // Remove leading slash
+        port: parseInt(url.port) || 3306,
+      };
+    } catch (error) {
+      console.error('Invalid DATABASE_URL format:', error);
+      throw new Error('Invalid DATABASE_URL format. Expected: mysql://username:password@host:port/database');
+    }
+  }
+  
+  // Fallback to individual environment variables
+  return {
+    host: process.env.DATABASE_HOST || 'localhost',
+    user: process.env.DATABASE_USER || 'root',
+    password: process.env.DATABASE_PASSWORD || '',
+    database: process.env.DATABASE_NAME || 'visual_product_matcher',
+    port: parseInt(process.env.DATABASE_PORT || '3306'),
+  };
+}
 
 const sampleProducts = [
   {
@@ -158,22 +182,33 @@ async function seed() {
   let connection;
   
   try {
+    const dbConfig = getDatabaseConfig();
+    
     console.log('🔌 Connecting to database...');
     console.log(`Host: ${dbConfig.host}:${dbConfig.port}`);
     console.log(`Database: ${dbConfig.database}`);
+    console.log(`User: ${dbConfig.user}`);
+    
+    if (process.env.DATABASE_URL) {
+      console.log('📝 Using DATABASE_URL configuration');
+    }
     
     connection = await mysql.createConnection(dbConfig);
     console.log('✅ Connected to database');
     
     // Check if products already exist
-    const [existing] = await connection.execute('SELECT COUNT(*) as count FROM products');
+    const [existing] = await connection.query('SELECT COUNT(*) as count FROM products');
     if (existing[0].count > 0) {
       console.log(`⚠️  ${existing[0].count} products already exist`);
-      console.log('Do you want to proceed? This will add duplicate products.');
-      console.log('Consider running: DELETE FROM products; first if needed.');
-      // For now, we'll skip to avoid duplicates
-      console.log('🚫 Skipping seed to avoid duplicates');
-      return;
+      console.log('❓ Do you want to add more sample products? (This will create duplicates)');
+      console.log('💡 To reset: DELETE FROM products; then run seed again');
+      
+      // For automation, let's ask user via a flag
+      if (!process.env.FORCE_SEED) {
+        console.log('🚫 Skipping seed to avoid duplicates');
+        console.log('💡 Set FORCE_SEED=true to add products anyway');
+        return;
+      }
     }
     
     console.log('🌱 Seeding sample products...');
@@ -203,9 +238,16 @@ async function seed() {
     }
     
     // Verify the seeding
-    const [finalCount] = await connection.execute('SELECT COUNT(*) as count FROM products');
+    const [finalCount] = await connection.query('SELECT COUNT(*) as count FROM products');
     console.log(`🎉 Seeding completed! Added ${successCount}/${sampleProducts.length} products`);
     console.log(`📊 Total products in database: ${finalCount[0].count}`);
+    
+    // Show categories
+    const [categories] = await connection.query('SELECT DISTINCT category FROM products ORDER BY category');
+    console.log('📂 Available categories:');
+    categories.forEach(cat => {
+      console.log(`   - ${cat.category}`);
+    });
     
   } catch (error) {
     console.error('❌ Seeding failed:', error);
@@ -214,10 +256,13 @@ async function seed() {
     // Provide helpful error messages
     if (error.code === 'ER_ACCESS_DENIED_ERROR') {
       console.error('🔑 Access denied. Please check your database credentials.');
+      console.error('   Check DATABASE_URL: mysql://username:password@host:port/database');
     } else if (error.code === 'ECONNREFUSED') {
       console.error('🔌 Connection refused. Please ensure MySQL server is running.');
     } else if (error.code === 'ER_BAD_DB_ERROR') {
       console.error('📦 Database does not exist. Please run migration first: npm run db:migrate');
+    } else if (error.code === 'ER_NO_SUCH_TABLE') {
+      console.error('📋 Tables not found. Please run migration first: npm run db:migrate');
     }
     
     process.exit(1);
