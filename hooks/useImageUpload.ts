@@ -1,57 +1,40 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 
-interface UploadState {
+interface ImageUploadState {
   isLoading: boolean;
-  error: string | null;
-  success: string | null;
   uploadedImage: string | null;
   features: number[] | null;
+  error: string | null;
+  success: string | null;
 }
 
 interface UseImageUploadReturn {
-  state: UploadState;
+  state: ImageUploadState;
   uploadFile: (file: File) => Promise<void>;
   uploadFromUrl: (url: string) => Promise<void>;
-  clearState: () => void;
   clearError: () => void;
+  clearSuccess: () => void;
+  reset: () => void;
 }
 
-export const useImageUpload = (): UseImageUploadReturn => {
-  const [state, setState] = useState<UploadState>({
+export function useImageUpload(): UseImageUploadReturn {
+  const [state, setState] = useState<ImageUploadState>({
     isLoading: false,
-    error: null,
-    success: null,
     uploadedImage: null,
-    features: null
+    features: null,
+    error: null,
+    success: null
   });
 
-  const clearError = useCallback(() => {
-    setState(prev => ({ ...prev, error: null }));
-  }, []);
-
-  const clearState = useCallback(() => {
-    setState({
-      isLoading: false,
+  const uploadFile = async (file: File): Promise<void> => {
+    setState(prev => ({
+      ...prev,
+      isLoading: true,
       error: null,
-      success: null,
-      uploadedImage: null,
-      features: null
-    });
-  }, []);
+      success: null
+    }));
 
-  const uploadFile = useCallback(async (file: File) => {
     try {
-      setState(prev => ({ ...prev, isLoading: true, error: null, success: null }));
-
-      // Validate file on client side
-      if (!file.type.startsWith('image/')) {
-        throw new Error('Please select a valid image file');
-      }
-
-      if (file.size > 10 * 1024 * 1024) { // 10MB
-        throw new Error('File size must be less than 10MB');
-      }
-
       const formData = new FormData();
       formData.append('image', file);
 
@@ -59,7 +42,7 @@ export const useImageUpload = (): UseImageUploadReturn => {
         method: 'POST',
         body: formData,
         headers: {
-          'x-session-id': `session-${Date.now()}`
+          'x-session-id': generateSessionId()
         }
       });
 
@@ -69,12 +52,16 @@ export const useImageUpload = (): UseImageUploadReturn => {
         throw new Error(data.message || 'Upload failed');
       }
 
+      // Create preview URL
+      const previewUrl = URL.createObjectURL(file);
+
       setState(prev => ({
         ...prev,
         isLoading: false,
-        uploadedImage: data.imageUrl,
+        uploadedImage: previewUrl,
         features: data.features,
-        success: data.message
+        success: data.message || 'Image uploaded successfully',
+        error: null
       }));
 
     } catch (error: any) {
@@ -84,56 +71,79 @@ export const useImageUpload = (): UseImageUploadReturn => {
         error: error.message || 'Failed to upload image'
       }));
     }
-  }, []);
+  };
 
-  const uploadFromUrl = useCallback(async (imageUrl: string) => {
+  const uploadFromUrl = async (url: string): Promise<void> => {
+    setState(prev => ({
+      ...prev,
+      isLoading: true,
+      error: null,
+      success: null
+    }));
+
     try {
-      setState(prev => ({ ...prev, isLoading: true, error: null, success: null }));
-
-      // Validate URL on client side
-      try {
-        new URL(imageUrl);
-      } catch {
-        throw new Error('Please enter a valid URL');
-      }
-
       const response = await fetch('/api/upload-url', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-session-id': `session-${Date.now()}`
+          'x-session-id': generateSessionId()
         },
-        body: JSON.stringify({ imageUrl })
+        body: JSON.stringify({ imageUrl: url })
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.message || 'URL processing failed');
+        throw new Error(data.message || 'URL upload failed');
       }
 
       setState(prev => ({
         ...prev,
         isLoading: false,
-        uploadedImage: data.imageUrl,
+        uploadedImage: url,
         features: data.features,
-        success: data.message
+        success: data.message || 'Image loaded successfully from URL',
+        error: null
       }));
 
     } catch (error: any) {
       setState(prev => ({
         ...prev,
         isLoading: false,
-        error: error.message || 'Failed to process image URL'
+        error: error.message || 'Failed to load image from URL'
       }));
     }
-  }, []);
+  };
+
+  const clearError = (): void => {
+    setState(prev => ({ ...prev, error: null }));
+  };
+
+  const clearSuccess = (): void => {
+    setState(prev => ({ ...prev, success: null }));
+  };
+
+  const reset = (): void => {
+    setState({
+      isLoading: false,
+      uploadedImage: null,
+      features: null,
+      error: null,
+      success: null
+    });
+  };
 
   return {
     state,
     uploadFile,
     uploadFromUrl,
-    clearState,
-    clearError
+    clearError,
+    clearSuccess,
+    reset
   };
-};
+}
+
+// Generate a simple session ID for tracking
+function generateSessionId(): string {
+  return `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+}

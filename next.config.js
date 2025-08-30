@@ -54,21 +54,17 @@ const nextConfig = {
     ];
   },
 
-  // Webpack configuration for TensorFlow.js
+  // Webpack configuration
   webpack: (config, { buildId, dev, isServer, defaultLoaders, webpack }) => {
-    // Handle TensorFlow.js in Node.js environment
+    // Handle TensorFlow.js properly for both server and client
     if (isServer) {
+      // For server-side, we'll use CPU-only operations
       config.externals = config.externals || [];
       config.externals.push({
         '@tensorflow/tfjs-node': 'commonjs @tensorflow/tfjs-node',
+        '@tensorflow/tfjs-node-gpu': 'commonjs @tensorflow/tfjs-node-gpu',
       });
     }
-
-    // Handle worker files for TensorFlow.js
-    config.module.rules.push({
-      test: /\.worker\.js$/,
-      use: { loader: 'worker-loader' }
-    });
 
     // Fix for package imports
     config.resolve.fallback = {
@@ -76,7 +72,24 @@ const nextConfig = {
       fs: false,
       path: false,
       crypto: false,
+      stream: false,
+      buffer: false,
+      util: false
     };
+
+    // Handle worker files
+    config.module.rules.push({
+      test: /\.worker\.js$/,
+      use: { loader: 'worker-loader' }
+    });
+
+    // Ignore specific warnings
+    config.module.rules.push({
+      test: /node_modules[\/\\]@tensorflow[\/\\]/,
+      use: {
+        loader: 'ignore-loader'
+      }
+    });
 
     return config;
   },
@@ -91,7 +104,7 @@ const nextConfig = {
     ignoreDuringBuilds: false,
   },
 
-  // Output configuration for different deployment targets
+  // Output configuration
   output: 'standalone',
 
   // Compression
@@ -109,14 +122,11 @@ const nextConfig = {
   // Redirects
   async redirects() {
     return [
-      // Add any redirects here if needed
-    ];
-  },
-
-  // Rewrites
-  async rewrites() {
-    return [
-      // Add any rewrites here if needed
+      {
+        source: '/app',
+        destination: '/app.tsx',
+        permanent: false,
+      }
     ];
   },
 };

@@ -1,51 +1,40 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { SearchResult } from '../lib/database';
+import { SimilarityOptions, SimilarityStats } from '../lib/services/similarityService';
 
-interface SearchOptions {
-  categoryFilter?: string;
-  minSimilarity?: number;
-  maxResults?: number;
-  method?: 'cosine' | 'euclidean';
-}
-
-interface SearchState {
+interface ProductSearchState {
   isLoading: boolean;
-  error: string | null;
   results: SearchResult[];
-  stats: any;
+  error: string | null;
+  stats: SimilarityStats | null;
 }
 
 interface UseProductSearchReturn {
-  state: SearchState;
-  searchProducts: (features: number[], options?: SearchOptions) => Promise<void>;
+  state: ProductSearchState;
+  searchProducts: (features: number[], options?: SimilarityOptions) => Promise<void>;
   clearResults: () => void;
   clearError: () => void;
 }
 
-export const useProductSearch = (): UseProductSearchReturn => {
-  const [state, setState] = useState<SearchState>({
+export function useProductSearch(): UseProductSearchReturn {
+  const [state, setState] = useState<ProductSearchState>({
     isLoading: false,
-    error: null,
     results: [],
+    error: null,
     stats: null
   });
 
-  const clearError = useCallback(() => {
-    setState(prev => ({ ...prev, error: null }));
-  }, []);
+  const searchProducts = async (
+    features: number[], 
+    options: SimilarityOptions = {}
+  ): Promise<void> => {
+    setState(prev => ({
+      ...prev,
+      isLoading: true,
+      error: null
+    }));
 
-  const clearResults = useCallback(() => {
-    setState(prev => ({ ...prev, results: [], stats: null, error: null }));
-  }, []);
-
-  const searchProducts = useCallback(async (features: number[], options: SearchOptions = {}) => {
     try {
-      setState(prev => ({ ...prev, isLoading: true, error: null }));
-
-      if (!features || features.length === 0) {
-        throw new Error('Invalid features provided');
-      }
-
       const response = await fetch('/api/search', {
         method: 'POST',
         headers: {
@@ -53,7 +42,10 @@ export const useProductSearch = (): UseProductSearchReturn => {
         },
         body: JSON.stringify({
           features,
-          ...options
+          categoryFilter: options.categoryFilter,
+          minSimilarity: options.minSimilarity || 0,
+          maxResults: options.maxResults || 50,
+          method: options.method || 'cosine'
         })
       });
 
@@ -67,7 +59,8 @@ export const useProductSearch = (): UseProductSearchReturn => {
         ...prev,
         isLoading: false,
         results: data.results || [],
-        stats: data.stats
+        stats: data.stats || null,
+        error: null
       }));
 
     } catch (error: any) {
@@ -77,7 +70,19 @@ export const useProductSearch = (): UseProductSearchReturn => {
         error: error.message || 'Failed to search products'
       }));
     }
-  }, []);
+  };
+
+  const clearResults = (): void => {
+    setState(prev => ({
+      ...prev,
+      results: [],
+      stats: null
+    }));
+  };
+
+  const clearError = (): void => {
+    setState(prev => ({ ...prev, error: null }));
+  };
 
   return {
     state,
@@ -85,4 +90,4 @@ export const useProductSearch = (): UseProductSearchReturn => {
     clearResults,
     clearError
   };
-};
+}
